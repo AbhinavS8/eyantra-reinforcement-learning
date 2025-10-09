@@ -79,7 +79,7 @@ def main():
     iteration = 0             # Counts training iterations
     prev_state = None         # State before taking an action
     prev_action = None        # Action taken from prev_state
-
+    reward=0
     # === Add Vriables Here ===
 
     print("[TRAIN] Starting training loop...")

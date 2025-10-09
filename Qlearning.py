@@ -44,8 +44,9 @@ class QLearningController:
         self.n_actions = n_actions
 
         # === Configure your learning rate (alpha) and exploration rate (epsilon) here ===
-        self.lr = 0  # Learning rate: how much new information overrides old
-        self.epsilon = 0  # Exploration rate: chance of choosing a random action
+        self.lr = 0.2        # Learning rate (α) — how fast new info overrides old
+        self.gamma = 0.9     # Discount factor (γ) — importance of future rewards
+        self.epsilon = 0.1
 
         self.filename = filename
 
@@ -53,7 +54,7 @@ class QLearningController:
         self.q_table = np.zeros((n_states, n_actions))
 
         # Action list: should be populated with your lineFollowers valid actions.The Below is just an Example.
-        self.action_list = [0, 1, 2]  # Example: 0 = left, 1 = forward, 2 = right
+        self.action_list = ["left", "slight_left", "forward", "slight_right", "right"]  # Example: 0 = left, 1 = forward, 2 = right
 
         # Mapping of action index to specific commands (e.g., motor speeds)
         self.actions = {}
@@ -70,14 +71,35 @@ class QLearningController:
 
         === TODO: Implement your logic to convert sensor_data to a discrete state ===
         """
+        print(sensor_data)
         # Write Your Logic From here #
-        state = None  # Replace this with your own state computation
+        threshold = 0.5  # You may tune this after seeing real data
+        binary_data = [
+            1 if sensor_data['left_corner'] < threshold else 0,
+            1 if sensor_data['left'] < threshold else 0,
+            1 if sensor_data['middle'] < threshold else 0,
+            1 if sensor_data['right'] < threshold else 0,
+            1 if sensor_data['right_corner'] < threshold else 0
+        ]  #discretize as 1,0
 
+            # Reduced state representation (6 states)
+        if binary_data == [0,0,1,0,0]:
+            state = 0  # CENTER
+        elif binary_data in ([0,1,1,0,0], [0,1,0,0,0]):
+            state = 1  # SLIGHT LEFT
+        elif binary_data in ([1,1,0,0,0], [1,0,0,0,0]):
+            state = 2  # STRONG LEFT
+        elif binary_data in ([0,0,1,1,0], [0,0,0,1,0]):
+            state = 3  # SLIGHT RIGHT
+        elif binary_data in ([0,0,0,1,1], [0,0,0,0,1]):
+            state = 4  # STRONG RIGHT
+        else:
+            state = 5  # LOST / OFF LINE
 
 
         return state
 
-    def Calculate_reward(self, state):
+    def Calculate_reward(self, state, prev_state=None, action=None, prev_action=None, consecutive_center=0):        
         """
         Calculate the reward based on the State.
 
@@ -91,7 +113,43 @@ class QLearningController:
                   For example, give +1 for going straight, -1 for hitting a wall, etc. ===
         """
         # Write Your Logic From here #
-        reward = 0  # Replace this with your reward logic
+        
+        base_rewards = {
+            0:  +1.00,   # CENTER
+            1:  +0.50,   # SLIGHT_LEFT
+            2:  +0.20,   # STRONG_LEFT
+            3:  +0.50,   # SLIGHT_RIGHT
+            4:  +0.20,   # STRONG_RIGHT
+            5:  -1.00    # LOST
+        }
+
+        reward = base_rewards.get(state, -0.5)  # default small negative if unknown
+
+        # --- Time penalty per step to encourage efficiency ---
+        time_penalty = -0.01
+        reward += time_penalty
+
+        # --- Bonus for staying centered consecutively (small, capped) ---
+        if state == 0 and consecutive_center and consecutive_center > 1:
+            # give a small increasing bonus for sustained centered tracking
+            bonus = min(0.05 * (consecutive_center - 1), 0.25)
+            reward += bonus
+
+        # --- Penalty for oscillation: if current action is reversal of previous action ---
+        # Define action encoding: 0=forward, 1=left, 2=right, 3=hard_left, 4=hard_right, etc.
+        if prev_action is not None and action is not None:
+            # you should define what counts as "opposite".
+            # Example: left (1) vs right (2) reversed, or hard left vs right reversed
+            opposite_pairs = {(1,2), (2,1), (3,4), (4,3)}
+            if (prev_action, action) in opposite_pairs:
+                reward += -0.20  # small oscillation penalty
+
+        # Optionally penalize long-term staying in STRONG states to push toward SLIGHT/CENTER
+        if state in (2,4):  # STRONG_LEFT or STRONG_RIGHT
+            reward += -0.05
+
+        # Clip reward to avoid extreme values (optional)
+        reward = max(-1.5, min(1.5, reward))
         return reward
 
     
@@ -109,8 +167,17 @@ class QLearningController:
         # Find index of action in action list
         a_idx = self.action_list.index(action)
 
+        # Get current Q value
+        old_value = self.q_table[state][a_idx]
 
-        self.q_table[state][a_idx] = 1  # Placeholder: replace with correct update
+        # Best future Q value for next state
+        next_max = max(self.q_table[next_state])
+
+        # Q-learning update
+        new_value = old_value + self.lr * (reward + self.gamma * next_max - old_value)
+
+        # Write updated value back to table
+        self.q_table[state][a_idx] = new_value
 
     def choose_action(self, state):
         """
@@ -129,9 +196,14 @@ class QLearningController:
         === TODO: Replace with your epsilon-greedy selection logic ===
         """
         # Write Your Logic From here #
-        index = None  # Just a placeholder
+        if random.uniform(0, 1) < self.epsilon:
+            # Explore: choose a random action
+            index = random.randint(0, len(self.action_list) - 1)
+        else:
+            # Exploit: choose the action with the max Q-value for this state
+            index = np.argmax(self.q_table[state])
 
-        return self.action_list[index]  # Currently returns fixed action (for testing)
+        return self.action_list[index]
 
     def perform_action(self, action):
         """
@@ -147,8 +219,34 @@ class QLearningController:
         === TODO: Implement action-to-motor translation logic based on your robot ===
         """
         # Write Your Logic From here #
-        left_motor_speed = 1
-        right_motor_speed = 1
+        base_speed = 1.0  # Base forward speed
+        turn_speed = 0.5  # Reduced speed for turning
+
+        if action == "forward":
+            left_motor_speed = base_speed
+            right_motor_speed = base_speed
+
+        elif action == "slight_left":
+            left_motor_speed = turn_speed
+            right_motor_speed = base_speed
+
+        elif action == "left":
+            left_motor_speed = 0.0
+            right_motor_speed = base_speed
+
+        elif action == "slight_right":
+            left_motor_speed = base_speed
+            right_motor_speed = turn_speed
+
+        elif action == "right":
+            left_motor_speed = base_speed
+            right_motor_speed = 0.0
+
+        else:
+            # Stop or invalid action
+            left_motor_speed = 0.0
+            right_motor_speed = 0.0
+
         return left_motor_speed, right_motor_speed
 
     def save_q_table(self):
@@ -164,8 +262,10 @@ class QLearningController:
                 'q_table': self.q_table,
                 'epsilon': self.epsilon,
                 'n_action': self.n_actions,
-                'n_states': self.n_states
+                'n_states': self.n_states,
                 # Add any additional data you want to save
+                'lr': self.lr,
+                'gamma': getattr(self, 'gamma', 0.9)
             }, f)
 
     def load_q_table(self):
@@ -179,9 +279,12 @@ class QLearningController:
             with open(self.filename, 'rb') as f:
                 data = pickle.load(f)
             self.q_table = data.get('q_table', self.q_table)
-            self.epsilon = data.get('epsilon', self.epsilon)
+            self.epsilon = data.get('epsilon', self.epsilon)    
             self.n_actions = data.get('n_action', self.n_actions)
             self.n_states = data.get('n_states', self.n_states)
+
+            self.lr = data.get('lr', self.lr)
+            self.gamma = data.get('gamma', getattr(self, 'gamma', 0.9))
             # Load other data here if needed
             return True
         return False
