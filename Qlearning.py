@@ -46,7 +46,15 @@ class QLearningController:
         # === Configure your learning rate (alpha) and exploration rate (epsilon) here ===
         self.lr = 0.2        # Learning rate (α) — how fast new info overrides old
         self.gamma = 0.9     # Discount factor (γ) — importance of future rewards
-        self.epsilon = 0.1
+
+        # Epsilon-greedy parameters (exploration)
+        # You can configure a decaying epsilon to reduce exploration over time.
+        self.epsilon_start = 0.9
+        self.epsilon_min = 0.05
+        # epsilon_decay can be a multiplicative factor (<1) or a decay per step when using linear schedule.
+        # Here we implement multiplicative exponential decay by default.
+        self.epsilon_decay = 0.99
+        self.epsilon = self.epsilon_start
 
         self.filename = filename
 
@@ -71,15 +79,14 @@ class QLearningController:
 
         === TODO: Implement your logic to convert sensor_data to a discrete state ===
         """
-        print(sensor_data)
         # Write Your Logic From here #
-        threshold = 0.5  # You may tune this after seeing real data
+        threshold = 0.4  # You may tune this after seeing real data
         binary_data = [
-            1 if sensor_data['left_corner'] < threshold else 0,
-            1 if sensor_data['left'] < threshold else 0,
-            1 if sensor_data['middle'] < threshold else 0,
-            1 if sensor_data['right'] < threshold else 0,
-            1 if sensor_data['right_corner'] < threshold else 0
+            1 if sensor_data['left_corner'] > threshold else 0,
+            1 if sensor_data['left'] > threshold else 0,
+            1 if sensor_data['middle'] > threshold else 0,
+            1 if sensor_data['right'] > threshold else 0,
+            1 if sensor_data['right_corner'] > threshold else 0
         ]  #discretize as 1,0
 
             # Reduced state representation (6 states)
@@ -96,7 +103,7 @@ class QLearningController:
         else:
             state = 5  # LOST / OFF LINE
 
-
+        print(binary_data)
         return state
 
     def Calculate_reward(self, state, prev_state=None, action=None, prev_action=None, consecutive_center=0):        
@@ -115,19 +122,15 @@ class QLearningController:
         # Write Your Logic From here #
         
         base_rewards = {
-            0:  +1.00,   # CENTER
-            1:  +0.50,   # SLIGHT_LEFT
-            2:  +0.20,   # STRONG_LEFT
-            3:  +0.50,   # SLIGHT_RIGHT
-            4:  +0.20,   # STRONG_RIGHT
+            0:  +2.00,   # CENTER
+            1:  +0.90,   # SLIGHT_LEFT
+            2:  +0.00,   # STRONG_LEFT
+            3:  +0.90,   # SLIGHT_RIGHT
+            4:  +0.00,   # STRONG_RIGHT
             5:  -1.00    # LOST
         }
 
-        reward = base_rewards.get(state, -0.5)  # default small negative if unknown
-
-        # --- Time penalty per step to encourage efficiency ---
-        time_penalty = -0.01
-        reward += time_penalty
+        reward = base_rewards.get(state, 0)  # default small negative if unknown
 
         # --- Bonus for staying centered consecutively (small, capped) ---
         if state == 0 and consecutive_center and consecutive_center > 1:
@@ -149,7 +152,8 @@ class QLearningController:
             reward += -0.05
 
         # Clip reward to avoid extreme values (optional)
-        reward = max(-1.5, min(1.5, reward))
+        # reward = max(-1.5, min(1.5, reward))
+        print(state,reward)
         return reward
 
     
@@ -203,7 +207,9 @@ class QLearningController:
             # Exploit: choose the action with the max Q-value for this state
             index = np.argmax(self.q_table[state])
 
+        self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         return self.action_list[index]
+
 
     def perform_action(self, action):
         """
@@ -222,25 +228,16 @@ class QLearningController:
         base_speed = 1.0  # Base forward speed
         turn_speed = 0.5  # Reduced speed for turning
 
-        if action == "forward":
-            left_motor_speed = base_speed
-            right_motor_speed = base_speed
-
+        if action == "left":
+            return -0.1, 0.5      # hard left turn
         elif action == "slight_left":
-            left_motor_speed = turn_speed
-            right_motor_speed = base_speed
-
-        elif action == "left":
-            left_motor_speed = 0.0
-            right_motor_speed = base_speed
-
+            return 0.1, 0.5       # gentle left
+        elif action == "forward":
+            return 0.7, 0.7       # straight
         elif action == "slight_right":
-            left_motor_speed = base_speed
-            right_motor_speed = turn_speed
-
+            return 0.5, 0.1       # gentle right
         elif action == "right":
-            left_motor_speed = base_speed
-            right_motor_speed = 0.0
+            return 0.5, -0.1      # hard right turn
 
         else:
             # Stop or invalid action
