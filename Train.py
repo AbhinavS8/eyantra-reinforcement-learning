@@ -26,7 +26,7 @@
 import time
 import signal
 import sys
-
+import random
 # Import required modules for communication and Q-learning
 from Connector import CoppeliaClient       
 from Qlearning import QLearningController 
@@ -59,10 +59,10 @@ def main():
 
     # === Q-table & Training Configuration ===
     # Adjust According to Your Need.
-    N_STATES = 0         # Number of discrete states (MUST MATCH your Get_state logic)
-    N_ACTIONS = 3        # Number of actions available (must match your action_list)
+    N_STATES = 6         # Number of discrete states (MUST MATCH your Get_state logic)
+    N_ACTIONS = 5        # Number of actions available (must match your action_list)
     #Add Other Parameter According to your logic.
-    SAVE_INTERVAL = 100  # Save Q-table to disk every N iterations
+    SAVE_INTERVAL = 50  # Save Q-table to disk every N iterations
 
     # === Initialize Q-learning Controller ===
     ql = QLearningController(n_states=N_STATES, n_actions=N_ACTIONS)
@@ -88,7 +88,7 @@ def main():
     while not stop_requested:
         #  Read sensor data from simulator
         sensor_data = client.receive_sensor_data()
-        print(sensor_data)  # Optional: Log raw sensor input
+        # print(sensor_data)  # Optional: Log raw sensor input
         if not sensor_data:
             time.sleep(0.05)
             continue  # Skip iteration if sensor data is invalid
@@ -103,11 +103,16 @@ def main():
 
         # Choose next action based on current state (explore or exploit)
         action = ql.choose_action(state)
+        # if prev_action and random.uniform(0, 1) < 0.3:
+        # # 30% chance to repeat the same action even if Q-values differ slightly
+        #     action = prev_action
 
         # Convert action into motor speeds (left, right)
         left_speed, right_speed = ql.perform_action(action)
 
         # Send motor command to the simulator
+        print(f"State={state}, Reward={reward}, Action={action}, Prev_Action={prev_action}")
+
         client.send_motor_command(left_speed, right_speed, state=state, action=action,reward=reward)
 
         prev_state = state

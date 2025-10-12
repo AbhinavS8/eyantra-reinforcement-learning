@@ -29,9 +29,15 @@ import random
 import pickle
 import os
 
+#next steps: reduce learning rate further?
+#reduce discretization to improve smoothness
+#change no of states if needed
+#add stability bonus if needed
+
 class QLearningController:
     def __init__(self, n_states=0, n_actions=0, filename="q_table.pkl"): 
         """
+        
         Initialize the Q-learning controller.
 
         Parameters:
@@ -44,8 +50,8 @@ class QLearningController:
         self.n_actions = n_actions
 
         # === Configure your learning rate (alpha) and exploration rate (epsilon) here ===
-        self.lr = 0.2        # Learning rate (α) — how fast new info overrides old
-        self.gamma = 0.9     # Discount factor (γ) — importance of future rewards
+        self.lr = 0.05        # Learning rate (α) — how fast new info overrides old
+        self.gamma = 0.99     # Discount factor (γ) — importance of future rewards
 
         # Epsilon-greedy parameters (exploration)
         # You can configure a decaying epsilon to reduce exploration over time.
@@ -53,7 +59,7 @@ class QLearningController:
         self.epsilon_min = 0.05
         # epsilon_decay can be a multiplicative factor (<1) or a decay per step when using linear schedule.
         # Here we implement multiplicative exponential decay by default.
-        self.epsilon_decay = 0.99
+        self.epsilon_decay = 0.995
         self.epsilon = self.epsilon_start
 
         self.filename = filename
@@ -62,7 +68,7 @@ class QLearningController:
         self.q_table = np.zeros((n_states, n_actions))
 
         # Action list: should be populated with your lineFollowers valid actions.The Below is just an Example.
-        self.action_list = ["left", "slight_left", "forward", "slight_right", "right"]  # Example: 0 = left, 1 = forward, 2 = right
+        self.action_list = ["center","slight_left",'mod_left','strong_left','slight_right','mod_right','strong_right']  # Example: 0 = left, 1 = forward, 2 = right
 
         # Mapping of action index to specific commands (e.g., motor speeds)
         self.actions = {}
@@ -89,19 +95,23 @@ class QLearningController:
             1 if sensor_data['right_corner'] > threshold else 0
         ]  #discretize as 1,0
 
-            # Reduced state representation (6 states)
-        if binary_data == [0,0,1,0,0]:
+            # state representation
+        if binary_data in ([0,0,1,0,0],[0,1,1,1,0],[1,1,1,1,1]):
             state = 0  # CENTER
-        elif binary_data in ([0,1,1,0,0], [0,1,0,0,0]):
+        elif binary_data in ([0,1,1,0,0],[0,1,0,0,0],[1,1,1,1,0]):
             state = 1  # SLIGHT LEFT
-        elif binary_data in ([1,1,0,0,0], [1,0,0,0,0]):
-            state = 2  # STRONG LEFT
-        elif binary_data in ([0,0,1,1,0], [0,0,0,1,0]):
-            state = 3  # SLIGHT RIGHT
+        elif binary_data in ([1,1,0,0,0], [1,1,1,0,0]):
+            state = 2 # moderate left
+        elif binary_data in ([1,0,0,0,0]):
+            state = 3  # STRONG LEFT
+        elif binary_data in ([0,0,1,1,0], [0,0,0,1,0],[0,1,1,1,1]):
+            state = 4  # SLIGHT RIGHT
+        elif binary_data in ([0,0,0,1,1], [0,0,1,1,1]):
+            state = 5 # moderate right
         elif binary_data in ([0,0,0,1,1], [0,0,0,0,1]):
-            state = 4  # STRONG RIGHT
+            state = 6  # STRONG RIGHT
         else:
-            state = 5  # LOST / OFF LINE
+            state = 7  # LOST / OFF LINE
 
         print(binary_data)
         return state
@@ -123,37 +133,36 @@ class QLearningController:
         
         base_rewards = {
             0:  +2.00,   # CENTER
-            1:  +0.90,   # SLIGHT_LEFT
-            2:  +0.00,   # STRONG_LEFT
-            3:  +0.90,   # SLIGHT_RIGHT
-            4:  +0.00,   # STRONG_RIGHT
-            5:  -1.00    # LOST
+            1:  +0.40,   # SLIGHT_LEFT
+            2:  +0.25,   # moderate_left
+            3:  +0.10,   # STRONG_LEFT
+            4:  +0.40,   # SLIGHT_RIGHT
+            5:  +0.25,   # moderate_right
+            6:  +0.10,   # STRONG_RIGHT
+            7:  -1.00,   # LOST
         }
 
         reward = base_rewards.get(state, 0)  # default small negative if unknown
 
-        # --- Bonus for staying centered consecutively (small, capped) ---
-        if state == 0 and consecutive_center and consecutive_center > 1:
-            # give a small increasing bonus for sustained centered tracking
-            bonus = min(0.05 * (consecutive_center - 1), 0.25)
-            reward += bonus
 
-        # --- Penalty for oscillation: if current action is reversal of previous action ---
-        # Define action encoding: 0=forward, 1=left, 2=right, 3=hard_left, 4=hard_right, etc.
-        if prev_action is not None and action is not None:
-            # you should define what counts as "opposite".
-            # Example: left (1) vs right (2) reversed, or hard left vs right reversed
-            opposite_pairs = {(1,2), (2,1), (3,4), (4,3)}
-            if (prev_action, action) in opposite_pairs:
-                reward += -0.20  # small oscillation penalty
+        # === Oscillation penalty ===
+        # If the robot alternates direction too quickly, penalize it.
+        if prev_action and action:
+            if (
+                (("left" in prev_action) and ("right" in action)) or
+                (("right" in prev_action) and ("left" in action))
+            ):
+                reward -= 0.1  # oscillation penalty
 
-        # Optionally penalize long-term staying in STRONG states to push toward SLIGHT/CENTER
-        if state in (2,4):  # STRONG_LEFT or STRONG_RIGHT
-            reward += -0.05
+        # === Small penalty for unnecessary small direction changes ===
+        if prev_action and action and prev_action != action:
+            reward -= 0.05
 
-        # Clip reward to avoid extreme values (optional)
-        # reward = max(-1.5, min(1.5, reward))
-        print(state,reward)
+        # === Stability bonus ===
+        # Encourage staying centered for multiple steps
+        if state in [0, 4]:
+            if consecutive_center >= 3:
+                reward += 0.3  # stability bonus
         return reward
 
     
@@ -206,7 +215,7 @@ class QLearningController:
         else:
             # Exploit: choose the action with the max Q-value for this state
             index = np.argmax(self.q_table[state])
-
+        
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         return self.action_list[index]
 
@@ -225,26 +234,24 @@ class QLearningController:
         === TODO: Implement action-to-motor translation logic based on your robot ===
         """
         # Write Your Logic From here #
-        base_speed = 1.0  # Base forward speed
-        turn_speed = 0.5  # Reduced speed for turning
 
-        if action == "left":
-            return -0.1, 0.5      # hard left turn
+        if action == "strong_left":
+            return -0.1, 0.7
+        if action == "moderate_left":
+            return 0.05, 0.65
         elif action == "slight_left":
-            return 0.1, 0.5       # gentle left
-        elif action == "forward":
-            return 0.7, 0.7       # straight
+            return 0.2, 0.6
+        elif action == "center":
+            return 0.7, 0.7
         elif action == "slight_right":
-            return 0.5, 0.1       # gentle right
-        elif action == "right":
-            return 0.5, -0.1      # hard right turn
-
+            return 0.6, 0.2
+        if action == "moderate_left":
+            return 0.65, 0.05
+        elif action == "strong_right":
+            return 0.7, -0.1
         else:
-            # Stop or invalid action
-            left_motor_speed = 0.0
-            right_motor_speed = 0.0
+            return 0.1, 0.1
 
-        return left_motor_speed, right_motor_speed
 
     def save_q_table(self):
         """
