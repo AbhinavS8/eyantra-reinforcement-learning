@@ -29,15 +29,9 @@ import random
 import pickle
 import os
 
-#next steps: reduce learning rate further?
-#reduce discretization to improve smoothness
-#change no of states if needed
-#add stability bonus if needed
-
 class QLearningController:
     def __init__(self, n_states=0, n_actions=0, filename="q_table.pkl"): 
         """
-        
         Initialize the Q-learning controller.
 
         Parameters:
@@ -50,16 +44,13 @@ class QLearningController:
         self.n_actions = n_actions
 
         # === Configure your learning rate (alpha) and exploration rate (epsilon) here ===
-        self.lr = 0.05        # Learning rate (α) — how fast new info overrides old
-        self.gamma = 0.99     # Discount factor (γ) — importance of future rewards
+        self.lr = 0.005        # Learning rate (α) — how fast new info overrides old
+        self.gamma = 0.9     # Discount factor (γ) — importance of future rewards
 
         # Epsilon-greedy parameters (exploration)
-        # You can configure a decaying epsilon to reduce exploration over time.
         self.epsilon_start = 0.9
         self.epsilon_min = 0.05
-        # epsilon_decay can be a multiplicative factor (<1) or a decay per step when using linear schedule.
-        # Here we implement multiplicative exponential decay by default.
-        self.epsilon_decay = 0.995
+        self.epsilon_decay = 0.99
         self.epsilon = self.epsilon_start
 
         self.filename = filename
@@ -68,7 +59,11 @@ class QLearningController:
         self.q_table = np.zeros((n_states, n_actions))
 
         # Action list: should be populated with your lineFollowers valid actions.The Below is just an Example.
-        self.action_list = ["center","slight_left",'mod_left','strong_left','slight_right','mod_right','strong_right']  # Example: 0 = left, 1 = forward, 2 = right
+        self.action_list = ["left", "forward","right"]  # Example: 0 = left, 1 = forward, 2 = right
+
+        # Action history for oscillation detection
+        self.action_history = []
+        self.max_history = 6
 
         # Mapping of action index to specific commands (e.g., motor speeds)
         self.actions = {}
@@ -86,7 +81,7 @@ class QLearningController:
         === TODO: Implement your logic to convert sensor_data to a discrete state ===
         """
         # Write Your Logic From here #
-        threshold = 0.4  # You may tune this after seeing real data
+        threshold = 0.35  # You may tune this after seeing real data
         binary_data = [
             1 if sensor_data['left_corner'] > threshold else 0,
             1 if sensor_data['left'] > threshold else 0,
@@ -95,26 +90,22 @@ class QLearningController:
             1 if sensor_data['right_corner'] > threshold else 0
         ]  #discretize as 1,0
 
-            # state representation
-        if binary_data in ([0,0,1,0,0],[0,1,1,1,0],[1,1,1,1,1]):
+        if binary_data in ([0,0,1,0,0],[0,1,1,1,0]):
             state = 0  # CENTER
-        elif binary_data in ([0,1,1,0,0],[0,1,0,0,0],[1,1,1,1,0]):
+        elif binary_data in ([0,1,1,0,0], [0,1,0,0,0],[1,1,1,1,0]):
             state = 1  # SLIGHT LEFT
-        elif binary_data in ([1,1,0,0,0], [1,1,1,0,0]):
-            state = 2 # moderate left
-        elif binary_data in ([1,0,0,0,0]):
-            state = 3  # STRONG LEFT
+        elif binary_data in ([1,1,0,0,0], [1,0,0,0,0],[1,1,1,0,0]):
+            state = 2  # STRONG LEFT
         elif binary_data in ([0,0,1,1,0], [0,0,0,1,0],[0,1,1,1,1]):
-            state = 4  # SLIGHT RIGHT
-        elif binary_data in ([0,0,0,1,1], [0,0,1,1,1]):
-            state = 5 # moderate right
-        elif binary_data in ([0,0,0,1,1], [0,0,0,0,1]):
-            state = 6  # STRONG RIGHT
+            state = 3  # SLIGHT RIGHT
+        elif binary_data in ([0,0,0,1,1], [0,0,0,0,1],[0,0,1,1,1]):
+            state = 4  # STRONG RIGHT
         else:
-            state = 7  # LOST / OFF LINE
+            state = 5  # LOST
 
         print(binary_data)
         return state
+
 
     def Calculate_reward(self, state, prev_state=None, action=None, prev_action=None, consecutive_center=0):        
         """
@@ -133,36 +124,60 @@ class QLearningController:
         
         base_rewards = {
             0:  +2.00,   # CENTER
-            1:  +0.40,   # SLIGHT_LEFT
-            2:  +0.25,   # moderate_left
-            3:  +0.10,   # STRONG_LEFT
-            4:  +0.40,   # SLIGHT_RIGHT
-            5:  +0.25,   # moderate_right
-            6:  +0.10,   # STRONG_RIGHT
-            7:  -1.00,   # LOST
+            1:  -0.10,   # SLIGHT_LEFT
+            2:  -0.50,   # STRONG_LEFT
+            3:  -0.10,   # SLIGHT_RIGHT
+            4:  -0.50,   # STRONG_RIGHT
+            5:  -2.00    # LOST
         }
 
-        reward = base_rewards.get(state, 0)  # default small negative if unknown
+        reward = base_rewards.get(state, 0)
 
+        # Update action history
+        if action is not None:
+            self.action_history.append(action)
+            if len(self.action_history) > self.max_history:
+                self.action_history.pop(0)
 
-        # === Oscillation penalty ===
-        # If the robot alternates direction too quickly, penalize it.
-        if prev_action and action:
-            if (
-                (("left" in prev_action) and ("right" in action)) or
-                (("right" in prev_action) and ("left" in action))
-            ):
-                reward -= 0.1  # oscillation penalty
+        oscillation_penalty = 0
+        
+        # Immediate oscillations
+        if prev_action is not None and action is not None:
+            if (prev_action == "left" and action == "right") or (prev_action == "right" and action == "left"):
+                oscillation_penalty += 0.5
 
-        # === Small penalty for unnecessary small direction changes ===
-        if prev_action and action and prev_action != action:
-            reward -= 0.05
+        # old oscillation detection (check last 4-6 actions)
+        if len(self.action_history) >= 4:
+            switches = 0
+            for i in range(len(self.action_history) - 1):
+                curr_act = self.action_history[i]
+                next_act = self.action_history[i + 1]
+                if (curr_act == "left" and next_act == "right") or (curr_act == "right" and next_act == "left"):
+                    switches += 1
+            
+            # Penalize if multiple switches
+            if switches >= 2:  
+                oscillation_penalty += 0.3 * switches
+                
+            if len(self.action_history) >= 4:
+                recent_actions = self.action_history[-4:]
+                left_count = recent_actions.count("left")
+                right_count = recent_actions.count("right")
 
-        # === Stability bonus ===
-        # Encourage staying centered for multiple steps
-        if state in [0, 4]:
-            if consecutive_center >= 3:
-                reward += 0.3  # stability bonus
+                if left_count >= 2 and right_count >= 2:
+                    oscillation_penalty += 0.4
+
+        reward -= oscillation_penalty
+                
+        #Bonus
+        if state == 0 and action == "forward":
+            reward += 0.2
+            
+        if state == 0 and (action == "left" or action == "right"):
+            reward -= 0.3  # Discourage unnecessary turns
+            
+
+        print(state,reward)
         return reward
 
     
@@ -177,13 +192,11 @@ class QLearningController:
         === TODO: Implement the Q-learning update rule here ===
         """
         # Write Your Logic From here #
-        # Find index of action in action list
         a_idx = self.action_list.index(action)
 
         # Get current Q value
         old_value = self.q_table[state][a_idx]
 
-        # Best future Q value for next state
         next_max = max(self.q_table[next_state])
 
         # Q-learning update
@@ -215,10 +228,13 @@ class QLearningController:
         else:
             # Exploit: choose the action with the max Q-value for this state
             index = np.argmax(self.q_table[state])
-        
+
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         return self.action_list[index]
 
+    def reset_action_history(self):
+        """Reset the action history (useful at the start of new episodes)"""
+        self.action_history = []
 
     def perform_action(self, action):
         """
@@ -235,23 +251,20 @@ class QLearningController:
         """
         # Write Your Logic From here #
 
-        if action == "strong_left":
-            return -0.1, 0.7
-        if action == "moderate_left":
-            return 0.05, 0.65
-        elif action == "slight_left":
-            return 0.2, 0.6
-        elif action == "center":
-            return 0.7, 0.7
-        elif action == "slight_right":
-            return 0.6, 0.2
-        if action == "moderate_left":
-            return 0.65, 0.05
-        elif action == "strong_right":
-            return 0.7, -0.1
-        else:
-            return 0.1, 0.1
 
+        if action == "left":
+            return -0.0, 0.3      # hard left turn
+        elif action == "forward":
+            return 0.7, 0.7       # straight
+        elif action == "right":
+            return 0.3, -0.0      # hard right turn
+
+        else:
+            #invalid
+            left_motor_speed = 0.0
+            right_motor_speed = 0.0
+
+        return left_motor_speed, right_motor_speed
 
     def save_q_table(self):
         """
@@ -269,7 +282,8 @@ class QLearningController:
                 'n_states': self.n_states,
                 # Add any additional data you want to save
                 'lr': self.lr,
-                'gamma': getattr(self, 'gamma', 0.9)
+                'gamma': getattr(self, 'gamma', 0.9),
+                'action_history': getattr(self, 'action_history', [])
             }, f)
 
     def load_q_table(self):
@@ -290,5 +304,6 @@ class QLearningController:
             self.lr = data.get('lr', self.lr)
             self.gamma = data.get('gamma', getattr(self, 'gamma', 0.9))
             # Load other data here if needed
+            self.action_history = data.get('action_history', [])
             return True
         return False

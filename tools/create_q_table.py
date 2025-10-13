@@ -3,7 +3,7 @@ import pickle
 
 # Configuration must match Qlearning.py expectations
 N_STATES = 6   # states 0..10
-N_ACTIONS = 5   # as in action_list from attachment
+N_ACTIONS = 3   # as in action_list from attachment
 
 # Create an initial Q-table (zeros) and reasonable defaults
 q_table = np.zeros((N_STATES, N_ACTIONS))

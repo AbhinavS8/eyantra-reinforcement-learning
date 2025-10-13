@@ -59,8 +59,8 @@ def main():
 
     # === Q-table & Training Configuration ===
     # Adjust According to Your Need.
-    N_STATES = 6         # Number of discrete states (MUST MATCH your Get_state logic)
-    N_ACTIONS = 5        # Number of actions available (must match your action_list)
+    N_STATES = 6         # Number of discrete states (MUST MATCH your Get_state logic: 0-5)
+    N_ACTIONS = 3        # Number of actions available (must match your action_list)
     #Add Other Parameter According to your logic.
     SAVE_INTERVAL = 50  # Save Q-table to disk every N iterations
 
@@ -98,11 +98,16 @@ def main():
 
         # If not the first iteration, update Q-table using previous state and action
         if prev_state is not None and prev_action is not None:
-            reward = ql.Calculate_reward(state)  # Compute reward for action taken
+            # Choose next action first to pass to reward calculation for oscillation penalty
+            current_action = ql.choose_action(state)
+            reward = ql.Calculate_reward(state, prev_state=prev_state, action=current_action, prev_action=prev_action)  # Compute reward for action taken
             ql.update_q_table(prev_state, prev_action, reward, state)  # Q-learning update
+            action = current_action  # Use the action we already chose
+        else:
+            # Choose action normally for first iteration
+            action = ql.choose_action(state)
 
-        # Choose next action based on current state (explore or exploit)
-        action = ql.choose_action(state)
+        # Action is already chosen above (either in the if block or else block)
         # if prev_action and random.uniform(0, 1) < 0.3:
         # # 30% chance to repeat the same action even if Q-values differ slightly
         #     action = prev_action
