@@ -96,21 +96,16 @@ def main():
         # Convert sensor data to a discrete state
         state = ql.Get_state(sensor_data)
 
-        # If not the first iteration, update Q-table using previous state and action
         if prev_state is not None and prev_action is not None:
-            # Choose next action first to pass to reward calculation for oscillation penalty
             current_action = ql.choose_action(state)
             reward = ql.Calculate_reward(state, prev_state=prev_state, action=current_action, prev_action=prev_action)  # Compute reward for action taken
             ql.update_q_table(prev_state, prev_action, reward, state)  # Q-learning update
-            action = current_action  # Use the action we already chose
+            action = current_action  
         else:
             # Choose action normally for first iteration
             action = ql.choose_action(state)
 
-        # Action is already chosen above (either in the if block or else block)
-        # if prev_action and random.uniform(0, 1) < 0.3:
-        # # 30% chance to repeat the same action even if Q-values differ slightly
-        #     action = prev_action
+
 
         # Convert action into motor speeds (left, right)
         left_speed, right_speed = ql.perform_action(action)
